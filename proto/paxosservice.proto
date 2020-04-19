@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package proto;
+
+message PrepareRequest {
+    int64 process_id = 1;
+    string propose_number = 2;
+}
+
+message Promise {
+    string propose_number = 2;
+    string accepted_propose_number = 3;
+    string accepted_key = 4;
+    string accepted_value = 5;
+    bool is_promised = 6;
+    int64 operation_id = 7;
+}
+
+message AcceptRequest {
+    int64 process_id = 1;
+    string propose_number = 2;
+    string max_key = 3;
+    string max_value = 4;
+}
+
+message Accepted {
+    string propose_number = 1;
+    string accepted_propose_number = 2;
+    string accepted_key = 3;
+    string accepted_value = 4;
+    bool isAccepted = 5;
+}
+
+message DecidedRequest {
+    int64 process_id = 1;
+    string propose_number = 2;
+    string max_key = 3;
+    string max_value = 4;
+    int64 operation_id = 5;
+}
+
+message DecidedResponse {
+    bool isMarkedDecided = 1;
+}
+
+service PaxosService {
+    rpc Prepare(PrepareRequest) returns (Promise) {}
+    rpc Accept(AcceptRequest) returns (Accepted) {}
+    rpc MarkDecided(DecidedRequest) returns(DecidedResponse) {}
+}
