@@ -13,6 +13,7 @@ func ConnectToPeers(peerPorts []int, myPort int) *Paxos {
 	noOfPeers := len(peerPorts)
 	paxos.MyPort = myPort
 	paxos.PeerClients = make(map[int]proto.PaxosServiceClient)
+	paxos.PeerConnections = make(map[int]*grpc.ClientConn)
 
 	for _, peer := range peerPorts {
 		connection, err := grpc.Dial("localhost"+fmt.Sprintf(":%d", peer), grpc.WithInsecure())
@@ -22,6 +23,7 @@ func ConnectToPeers(peerPorts []int, myPort int) *Paxos {
 
 		client := proto.NewPaxosServiceClient(connection)
 		paxos.PeerClients[peer] = client
+		paxos.PeerConnections[peer] = connection
 	}
 
 	paxos.Processes = make(map[int]*ProcessState)

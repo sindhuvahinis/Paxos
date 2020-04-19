@@ -4,6 +4,8 @@ import (
 	"../proto"
 	"context"
 	"fmt"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"log"
 	"math/rand"
 	"strconv"
@@ -35,13 +37,14 @@ type ProcessState struct {
 }
 
 type Paxos struct {
-	peerPorts    []int
-	PeerClients  map[int]proto.PaxosServiceClient
-	maxProcessId int
-	mutex        sync.Mutex
-	Processes    map[int]*ProcessState
-	MajoritySize int
-	MyPort       int
+	peerPorts       []int
+	PeerClients     map[int]proto.PaxosServiceClient
+	PeerConnections map[int]*grpc.ClientConn
+	MaxProcessId    int
+	mutex           sync.Mutex
+	Processes       map[int]*ProcessState
+	MajoritySize    int
+	MyPort          int
 }
 
 func (p *Paxos) Prepare(ctx context.Context, request *proto.PrepareRequest) (*proto.Promise, error) {
@@ -51,10 +54,12 @@ func (p *Paxos) Prepare(ctx context.Context, request *proto.PrepareRequest) (*pr
 	// Checking if process exist or not
 	processId := int(request.ProcessId)
 	if _, isExist := p.Processes[processId]; isExist {
-		if p.Processes[processId].promisedProposedNumber < request.ProposeNumber {
+		if p.Processes[processId].promisedProposedNumber <= request.ProposeNumber {
+			log.Printf("Process ID exists in Prepare")
 			canPromise = true
 		}
 	} else {
+		log.Printf("Process ID does not exists in Prepare")
 		p.Processes[processId] = &ProcessState{
 			status:                 Empty,
 			promisedProposedNumber: "",
@@ -64,7 +69,7 @@ func (p *Paxos) Prepare(ctx context.Context, request *proto.PrepareRequest) (*pr
 		canPromise = true
 	}
 
-	log.Printf("Can Promise value %v ", canPromise)
+	log.Printf("Can Promise %v Key %v  Value %v AcceptedProposeNumber %v", canPromise, p.Processes[processId].acceptedKey, p.Processes[processId].acceptedValue, p.Processes[processId].acceptedNumber)
 	if canPromise {
 		p.Processes[processId].promisedProposedNumber = request.ProposeNumber
 		return &proto.Promise{
@@ -144,8 +149,8 @@ func (p *Paxos) MarkDecided(ctx context.Context, request *proto.DecidedRequest) 
 			acceptedKey:            request.MaxKey,
 		}
 	}
-	if processId > p.maxProcessId {
-		p.maxProcessId = processId
+	if processId > p.MaxProcessId {
+		p.MaxProcessId = processId
 	}
 
 	return &proto.DecidedResponse{
@@ -156,7 +161,7 @@ func (p *Paxos) MarkDecided(ctx context.Context, request *proto.DecidedRequest) 
 func (p *Paxos) GetMaxProcessId() int {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	return p.maxProcessId
+	return p.MaxProcessId
 }
 
 func (p *Paxos) Status(processId int) (PaxosStatus, OperationValue) {
@@ -215,7 +220,12 @@ func (p *Paxos) sendPrepare(processId int, proposeNumber string, value Operation
 	maximumProposeNumber := ""
 	maximumValue := value
 	log.Printf("Prepare method is visited... ")
-	for _, peer := range p.PeerClients {
+	for port, peer := range p.PeerClients {
+		if !isConnectionAlive(p.PeerConnections[port]) {
+			log.Printf("Server with port number %v seems to be down. Hence request is not sent to the server. ", port)
+			continue
+		}
+
 		promise, err := peer.Prepare(context.Background(), &proto.PrepareRequest{ProcessId: int64(processId), ProposeNumber: proposeNumber})
 
 		if err != nil {
@@ -224,7 +234,9 @@ func (p *Paxos) sendPrepare(processId int, proposeNumber string, value Operation
 		}
 
 		if promise.IsPromised {
+			log.Printf("Accepted Proposal Number %v Maximum Proposal Number %v ", promise.AcceptedProposeNumber, maximumProposeNumber)
 			if promise.AcceptedProposeNumber > maximumProposeNumber {
+				log.Printf("Promise value is being updated..")
 				maximumProposeNumber = promise.AcceptedProposeNumber
 				maximumValue = OperationValue{
 					Key:         promise.AcceptedKey,
@@ -249,6 +261,11 @@ func (p *Paxos) sendAccept(processId int, proposeNumber string, maximumValue Ope
 			continue
 		}
 
+		if !isConnectionAlive(p.PeerConnections[port]) {
+			log.Printf("Server with port number %v seems to be down. Hence request is not sent to the server. ", port)
+			continue
+		}
+
 		accepted, _ := peer.Accept(context.Background(), &proto.AcceptRequest{
 			ProcessId:     int64(processId),
 			ProposeNumber: proposeNumber,
@@ -268,7 +285,13 @@ func (p *Paxos) sendAccept(processId int, proposeNumber string, maximumValue Ope
 }
 
 func (p *Paxos) sendDecided(processId int, proposeNumber string, maximumValue OperationValue) {
-	for _, peer := range p.PeerClients {
+	for port, peer := range p.PeerClients {
+
+		if !isConnectionAlive(p.PeerConnections[port]) {
+			log.Printf("Server with port number %v seems to be down. Hence request is not sent to the server. ", port)
+			continue
+		}
+
 		decidedResponse, _ := peer.MarkDecided(context.Background(), &proto.DecidedRequest{
 			ProcessId:     int64(processId),
 			ProposeNumber: proposeNumber,
@@ -284,8 +307,8 @@ func (p *Paxos) sendDecided(processId int, proposeNumber string, maximumValue Op
 }
 
 func (p *Paxos) updateMaximumProcessId(processId int) {
-	if processId > p.maxProcessId {
-		p.maxProcessId = processId
+	if processId > p.MaxProcessId {
+		p.MaxProcessId = processId
 	}
 }
 
@@ -305,4 +328,11 @@ func (p *Paxos) getRandomPorts() map[int]bool {
 	}
 
 	return peerRandomSet
+}
+
+func isConnectionAlive(connection *grpc.ClientConn) bool {
+	if connection.GetState() == connectivity.TransientFailure {
+		return false
+	}
+	return true
 }

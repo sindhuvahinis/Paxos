@@ -28,6 +28,7 @@ func (s *Server) Initialize(p *paxos.Paxos) {
 	s.CurrentProcessId = 0
 	s.KeyValueStore = &KeyValueStore.KeyValue{}
 	s.KeyValueStore.Initialize()
+	s.Paxos.MaxProcessId = -1
 }
 
 func (s *Server) synchronizeWithPeers(maxProcessId int) {
@@ -159,13 +160,17 @@ func (s *Server) startPaxosProcess(processId int, value paxos.OperationValue) pa
 }
 
 func (s *Server) connectWithPeersForAgreement(value paxos.OperationValue) {
-	processId := s.Paxos.GetMaxProcessId() + 1
-	s.synchronizeWithPeers(processId - 1)
-	agreementValue := s.startPaxosProcess(processId, value)
+	for {
+		processId := s.Paxos.GetMaxProcessId() + 1
+		s.synchronizeWithPeers(processId - 1)
 
-	log.Printf("Values Key %v Value %v Operation %v ", value.Key, value.Value, value.OperationId)
-	log.Printf("Agreement Key %v Value %v Operation %v ", agreementValue.Key, agreementValue.Value, agreementValue.OperationId)
-	if agreementValue.Key == value.Key && agreementValue.Value == value.Value && agreementValue.OperationId == value.OperationId {
-		s.synchronizeWithPeers(processId)
+		agreementValue := s.startPaxosProcess(processId, value)
+
+		log.Printf("Values Key %v Value %v Operation %v ", value.Key, value.Value, value.OperationId)
+		log.Printf("Agreement Key %v Value %v Operation %v ", agreementValue.Key, agreementValue.Value, agreementValue.OperationId)
+		if agreementValue.Key == value.Key && agreementValue.Value == value.Value && agreementValue.OperationId == value.OperationId {
+			s.synchronizeWithPeers(processId)
+			break
+		}
 	}
 }
